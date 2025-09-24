@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>臉部表情與FACS分析器 (修正版)</title>
+    <!-- 引入 Tailwind CSS 美化介面 -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        /* 自訂樣式，讓攝影機畫面置中且美觀 */
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif, 'Noto Sans TC';
+        }
+        #video-container {
+            position: relative;
+            width: 100%;
+            max-width: 720px;
+            aspect-ratio: 4 / 3;
+            margin: auto;
+            overflow: hidden; /* 隱藏超出容器的部分 */
+        }
+        video, canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            border-radius: 0.75rem; /* 圓角 */
+            object-fit: cover; /* **修改**：讓影像填滿容器，放大臉部區域 */
+        }
+    </style>
+</head>
+<body class="bg-gray-100 flex flex-col items-center justify-center min-h-screen p-4 text-gray-800">
+
+    <div class="w-full max-w-3xl text-center">
+        <h1 class="text-3xl md:text-4xl font-bold text-blue-600 mb-2">WebXR 臉部表情分析器</h1>
+        <p class="text-gray-600 mb-4">請將您的臉對準攝影機，並嘗試做出不同的表情。</p>
+    </div>
+
+    <div id="video-container" class="bg-black rounded-xl shadow-2xl mb-4">
+        <video id="video" autoplay muted playsinline></video>
+    </div>
+
+    <!-- 狀態顯示區域 -->
+    <div id="status-container" class="w-full max-w-3xl h-12 flex items-center justify-center bg-white rounded-lg shadow-md mb-4 px-4">
+        <p id="status" class="text-lg font-semibold text-red-500">正在初始化...</p>
+    </div>
+
+    <!-- FACS資訊顯示區域 -->
+    <div id="facs-info" class="w-full max-w-3xl bg-white rounded-lg shadow-md p-6">
+        <h2 class="text-xl font-bold text-blue-600 border-b pb-2 mb-4">偵測到的表情與FACS對應</h2>
+        <div class="space-y-3">
+            <p class="text-base">
+                <strong class="font-semibold text-gray-900">偵測到的表情：</strong> 
+                <span id="current-expression" class="text-blue-500 font-medium">尚未偵測</span>
+            </p>
+            <p class="text-base">
+                <strong class="font-semibold text-gray-900">可能的FACS動作單元(AU)：</strong> 
+                <span id="current-facs" class="text-gray-700"></span>
+            </p>
+        </div>
+    </div>
+
+    <!-- 引用 face-api.js 函式庫 -->
+    <script src="https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js"></script>
+
+    <script>
+        const video = document.getElementById('video');
+        const statusText = document.getElementById('status');
+        const currentExpressionEl = document.getElementById('current-expression');
+        const currentFacsEl = document.getElementById('current-facs');
+        // **最終修正**：更換為最穩定的 jsdelivr CDN 模型路徑
+        const MODEL_URL = 'https://cdn.jsdelivr.net/gh/justadudewhohacks/face-api.js@0.22.2/weights'; 
+
+        // FACS 對應資料
+        const facsMap = {
+            neutral: 'AU 0: 中性表情',
+            happy: 'AU 6 (臉頰提升) + AU 12 (嘴角上揚)',
+            sad: 'AU 1 (內眉提升) + AU 4 (眉頭下壓) + AU 15 (嘴角下壓)',
+            angry: 'AU 4 (眉頭下壓) + AU 5 (上眼瞼提升) + AU 7 (眼瞼收緊) + AU 23 (嘴唇收緊)',
+            surprised: 'AU 1 (內眉提升) + AU 2 (外眉提升) + AU 5 (上眼瞼提升) + AU 26 (下顎下降)',
+            fearful: 'AU 1+2+4 (眉毛動作) + AU 5 + AU 7 + AU 20 (嘴角橫向拉伸) + AU 25 (嘴唇張開)',
+            disgusted: 'AU 9 (皺鼻) + AU 15 (嘴角下壓) + AU 17 (下巴提升)'
+        };
+
+        async function loadModelsAndStart() {
+            try {
+                statusText.innerText = '正在載入AI模型 (可能需要一些時間)...';
+                await Promise.all([
+                    faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL),
+                    faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL),
+                    faceapi.nets.faceRecognitionNet.loadFromUri(MODEL_URL),
+                    faceapi.nets.faceExpressionNet.loadFromUri(MODEL_URL)
+                ]);
+                startVideo();
+            } catch (error) {
+                console.error("模型載入失敗:", error);
+                statusText.innerText = "模型載入失敗，請檢查網路連線或重新整理頁面。";
+            }
+        }
+
+        async function startVideo() {
+            statusText.innerText = '正在啟動攝影機...';
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ 
+                    video: { facingMode: 'user' } 
+                });
+                video.srcObject = stream;
+            } catch (err) {
+                console.error('攝影機錯誤:', err);
+                statusText.innerText = '無法啟動攝影機，請檢查權限設定。';
+            }
+        }
+
+        video.addEventListener('play', () => {
+            statusText.innerText = '模型已就緒！';
+            statusText.classList.remove('text-red-500');
+            statusText.classList.add('text-green-500');
+
+            const canvas = faceapi.createCanvasFromMedia(video);
+            document.getElementById('video-container').append(canvas);
+            
+            const displaySize = { width: video.clientWidth, height: video.clientHeight };
+            faceapi.matchDimensions(canvas, displaySize);
+
+            setInterval(async () => {
+                const detections = await faceapi.detectAllFaces(video, new faceapi.TinyFaceDetectorOptions()).withFaceLandmarks().withFaceExpressions();
+                
+                const resizedDetections = faceapi.resizeResults(detections, displaySize);
+                canvas.getContext('2d').clearRect(0, 0, canvas.width, canvas.height);
+
+                if (resizedDetections && resizedDetections.length > 0) {
+                    faceapi.draw.drawDetections(canvas, resizedDetections);
+                    faceapi.draw.drawFaceLandmarks(canvas, resizedDetections);
+                    
+                    const expressions = resizedDetections[0].expressions;
+                    const primaryExpression = Object.keys(expressions).reduce((a, b) => expressions[a] > expressions[b] ? a : b);
+                    const confidence = expressions[primaryExpression];
+
+                    currentExpressionEl.innerText = `${translateExpression(primaryExpression)} (信賴度: ${Math.round(confidence * 100)}%)`;
+                    currentFacsEl.innerText = facsMap[primaryExpression] || '無對應資料';
+                } else {
+                    currentExpressionEl.innerText = '未偵測到臉部';
+                    currentFacsEl.innerText = '';
+                }
+            }, 100);
+        });
+
+        function translateExpression(expression) {
+            const map = {
+                neutral: '中性', happy: '開心', sad: '悲傷', angry: '生氣',
+                surprised: '驚訝', fearful: '害怕', disgusted: '厭惡'
+            };
+            return map[expression] || expression;
+        }
+
+        // 啟動程式
+        loadModelsAndStart();
+    </script>
+</body>
+</html>
+
