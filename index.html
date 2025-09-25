@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>臉部表情與FACS分析器 (功能擴充版)</title>
+    <title>臉部表情分析器 (最終對位版)</title>
     <!-- 引入 Tailwind CSS 美化介面 -->
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
@@ -18,6 +18,7 @@
             aspect-ratio: 4 / 3;
             margin: auto;
             overflow: hidden; /* 隱藏超出容器的部分 */
+            background-color: #000; /* 新增背景色以防穿幫 */
         }
         video, canvas {
             position: absolute;
@@ -26,7 +27,9 @@
             width: 100%;
             height: 100%;
             border-radius: 0.75rem; /* 圓角 */
-            object-fit: cover; /* 讓影像填滿容器，放大臉部區域 */
+            /* *** 核心修正 *** */
+            /* 將 cover 改為 contain，確保完整影像顯示不被裁切 */
+            object-fit: contain;
         }
     </style>
 </head>
@@ -51,20 +54,20 @@
         <h2 class="text-xl font-bold text-blue-600 border-b pb-2 mb-4">綜合臉部資訊分析</h2>
         <div class="space-y-3">
             <p class="text-base">
-                <strong class="font-semibold text-gray-900">偵測到的表情：</strong> 
+                <strong class="font-semibold text-gray-900">偵測到的表情：</strong>
                 <span id="current-expression" class="text-blue-500 font-medium">尚未偵測</span>
             </p>
             <p class="text-base">
-                <strong class="font-semibold text-gray-900">可能的FACS動作單元(AU)：</strong> 
+                <strong class="font-semibold text-gray-900">可能的FACS動作單元(AU)：</strong>
                 <span id="current-facs" class="text-gray-700"></span>
             </p>
             <!-- 新增：顯示年齡與性別的欄位 -->
             <p class="text-base">
-                <strong class="font-semibold text-gray-900">預估年齡：</strong> 
+                <strong class="font-semibold text-gray-900">預估年齡：</strong>
                 <span id="current-age" class="text-gray-700"></span>
             </p>
             <p class="text-base">
-                <strong class="font-semibold text-gray-900">預估性別：</strong> 
+                <strong class="font-semibold text-gray-900">預估性別：</strong>
                 <span id="current-gender" class="text-gray-700"></span>
             </p>
         </div>
@@ -78,12 +81,10 @@
         const statusText = document.getElementById('status');
         const currentExpressionEl = document.getElementById('current-expression');
         const currentFacsEl = document.getElementById('current-facs');
-        // 新增：取得年齡與性別的顯示元素
         const currentAgeEl = document.getElementById('current-age');
         const currentGenderEl = document.getElementById('current-gender');
 
-        // 使用最穩定的 jsdelivr CDN 模型路徑
-        const MODEL_URL = 'https://cdn.jsdelivr.net/gh/justadudewhohacks/face-api.js@0.22.2/weights'; 
+        const MODEL_URL = 'https://cdn.jsdelivr.net/gh/justadudewhohacks/face-api.js@0.22.2/weights';
 
         // FACS 對應資料
         const facsMap = {
@@ -98,26 +99,26 @@
 
         async function loadModelsAndStart() {
             try {
-                statusText.innerText = '正在載入AI模型 (可能需要一些時間)...';
+                statusText.innerText = '正在從網路載入AI模型...';
                 await Promise.all([
                     faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL),
                     faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL),
                     faceapi.nets.faceRecognitionNet.loadFromUri(MODEL_URL),
                     faceapi.nets.faceExpressionNet.loadFromUri(MODEL_URL),
-                    faceapi.nets.ageGenderNet.loadFromUri(MODEL_URL) // 新增：載入年齡與性別模型
+                    faceapi.nets.ageGenderNet.loadFromUri(MODEL_URL)
                 ]);
                 startVideo();
             } catch (error) {
                 console.error("模型載入失敗:", error);
-                statusText.innerText = "模型載入失敗，請檢查網路連線或重新整理頁面。";
+                statusText.innerText = "模型載入失敗，請檢查您的網路連線並重新整理頁面。";
             }
         }
 
         async function startVideo() {
             statusText.innerText = '正在啟動攝影機...';
             try {
-                const stream = await navigator.mediaDevices.getUserMedia({ 
-                    video: { facingMode: 'user' } 
+                const stream = await navigator.mediaDevices.getUserMedia({
+                    video: { facingMode: 'user' }
                 });
                 video.srcObject = stream;
             } catch (err) {
@@ -133,45 +134,42 @@
 
             const canvas = faceapi.createCanvasFromMedia(video);
             document.getElementById('video-container').append(canvas);
-            
-            const displaySize = { width: video.clientWidth, height: video.clientHeight };
-            faceapi.matchDimensions(canvas, displaySize);
 
             setInterval(async () => {
-                // 修改：在偵測鏈中加入 withAgeAndGender()
+                const displaySize = { width: video.clientWidth, height: video.clientHeight };
+
+                if (canvas.width !== displaySize.width || canvas.height !== displaySize.height) {
+                    faceapi.matchDimensions(canvas, displaySize);
+                }
+
                 const detections = await faceapi.detectAllFaces(video, new faceapi.TinyFaceDetectorOptions())
                     .withFaceLandmarks()
                     .withFaceExpressions()
                     .withAgeAndGender();
-                
+
                 const resizedDetections = faceapi.resizeResults(detections, displaySize);
                 canvas.getContext('2d').clearRect(0, 0, canvas.width, canvas.height);
 
                 if (resizedDetections && resizedDetections.length > 0) {
-                    // faceapi.draw.drawDetections(canvas, resizedDetections); // 可以取消註解來顯示偵測框
                     faceapi.draw.drawFaceLandmarks(canvas, resizedDetections);
-                    
-                    // 從結果中取得表情、年齡、性別
+
                     const { expressions, age, gender, genderProbability } = resizedDetections[0];
 
-                    // 處理表情
                     const primaryExpression = Object.keys(expressions).reduce((a, b) => expressions[a] > expressions[b] ? a : b);
                     const confidence = expressions[primaryExpression];
                     currentExpressionEl.innerText = `${translateExpression(primaryExpression)} (信賴度: ${Math.round(confidence * 100)}%)`;
                     currentFacsEl.innerText = facsMap[primaryExpression] || '無對應資料';
-                    
-                    // 新增：顯示年齡與性別
+
                     currentAgeEl.innerText = `${Math.round(age)} 歲`;
                     currentGenderEl.innerText = `${translateGender(gender)} (信賴度: ${Math.round(genderProbability * 100)}%)`;
 
                 } else {
                     currentExpressionEl.innerText = '未偵測到臉部';
                     currentFacsEl.innerText = '';
-                    // 新增：清除年齡與性別資訊
                     currentAgeEl.innerText = '';
                     currentGenderEl.innerText = '';
                 }
-            }, 150); // 稍微增加間隔以優化效能
+            }, 150);
         });
 
         function translateExpression(expression) {
@@ -182,7 +180,6 @@
             return map[expression] || expression;
         }
 
-        // 新增：翻譯性別的函式
         function translateGender(gender) {
             const map = {
                 male: '男性',
@@ -196,4 +193,3 @@
     </script>
 </body>
 </html>
-
